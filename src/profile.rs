@@ -272,6 +272,61 @@ impl LimbProfile {
         }
     }
 
+    /// Vagus nerve — parasympathetic pathway from brainstem to heart.
+    ///
+    /// The vagus carries ACh efferent (brake on heart rate) and
+    /// interoceptive afferent (cardiac pulse, blood pressure feedback).
+    /// Single-channel autonomic efferent because it delivers one chemical (ACh).
+    /// Two-channel interoceptive afferent: [beat_timing, pressure_wave].
+    pub fn vagus_nerve() -> Self {
+        Self {
+            name: "vagus_nerve".into(),
+            tracts: vec![
+                // Parasympathetic efferent: ACh delivery to SA node
+                TractSpec {
+                    kind: FiberTractKind::AutonomicEfferent,
+                    dim: 1,
+                    conductivity: Some(200),  // well-myelinated vagus
+                    gain: Some(140),          // slight amplification
+                    elasticity: Some(180),    // smooth tracking (no abrupt jumps)
+                    endurance: Some(240),     // tireless — vagal tone is constant
+                    ..TractSpec::new(FiberTractKind::AutonomicEfferent, 1)
+                },
+                // Cardiac afferent: interoceptive signal from heart
+                TractSpec {
+                    kind: FiberTractKind::Interoceptive,
+                    dim: 2,                   // [beat_timing, pressure_wave]
+                    sensitivity: Some(200),   // the heart is loud
+                    receptor_mode: Some(ReceptorMode::Tonic), // sustained level reporting
+                    conductivity: Some(180),
+                    ..TractSpec::new(FiberTractKind::Interoceptive, 2)
+                },
+            ],
+        }
+    }
+
+    /// Sympathetic cardiac chain — sympathetic pathway from brainstem to heart.
+    ///
+    /// Carries NE efferent (gas pedal on heart rate). No afferent — the
+    /// vagus nerve handles all cardiac afferent. Single-channel: NE concentration.
+    pub fn sympathetic_cardiac() -> Self {
+        Self {
+            name: "sympathetic_cardiac".into(),
+            tracts: vec![
+                // Sympathetic efferent: NE delivery to SA node
+                TractSpec {
+                    kind: FiberTractKind::AutonomicEfferent,
+                    dim: 1,
+                    conductivity: Some(160),  // moderate myelination (thinner fibers)
+                    gain: Some(160),          // stronger amplification (stress response)
+                    elasticity: Some(140),    // slower tracking than vagal (NE ramps up slowly)
+                    endurance: Some(180),     // decent but fatigues under chronic stress
+                    ..TractSpec::new(FiberTractKind::AutonomicEfferent, 1)
+                },
+            ],
+        }
+    }
+
     /// Torso — core stability, high endurance, deep pain awareness.
     pub fn torso() -> Self {
         Self {
@@ -376,6 +431,38 @@ mod tests {
     }
 
     #[test]
+    fn vagus_nerve_profile() {
+        let profile = LimbProfile::vagus_nerve();
+        let bundle = profile.build();
+
+        assert_eq!(bundle.name, "vagus_nerve");
+        assert_eq!(bundle.tract_count(), 2);
+
+        // Parasympathetic efferent
+        let auto = bundle.tract(FiberTractKind::AutonomicEfferent).unwrap();
+        assert_eq!(auto.dim, 1);
+        assert!(auto.endurance >= 240, "vagal tone should be tireless");
+
+        // Cardiac afferent
+        let intero = bundle.tract(FiberTractKind::Interoceptive).unwrap();
+        assert_eq!(intero.dim, 2);
+        assert_eq!(intero.receptor_mode, ReceptorMode::Tonic);
+    }
+
+    #[test]
+    fn sympathetic_cardiac_profile() {
+        let profile = LimbProfile::sympathetic_cardiac();
+        let bundle = profile.build();
+
+        assert_eq!(bundle.name, "sympathetic_cardiac");
+        assert_eq!(bundle.tract_count(), 1);
+
+        let auto = bundle.tract(FiberTractKind::AutonomicEfferent).unwrap();
+        assert_eq!(auto.dim, 1);
+        assert!(auto.gain >= 160, "sympathetic should amplify strongly");
+    }
+
+    #[test]
     fn all_profiles_build_successfully() {
         let profiles = vec![
             LimbProfile::hand("left"),
@@ -387,6 +474,8 @@ mod tests {
             LimbProfile::vocal_tract(),
             LimbProfile::gaze(),
             LimbProfile::torso(),
+            LimbProfile::vagus_nerve(),
+            LimbProfile::sympathetic_cardiac(),
         ];
 
         for profile in profiles {

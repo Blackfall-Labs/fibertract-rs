@@ -201,7 +201,7 @@ mod tests {
 
         // Transmit through the tract to build input_density naturally.
         // Even if output is gated, the input stimulation drives adaptation.
-        let input = [Signal { polarity: 1, magnitude: 100 }, Signal::default()];
+        let input = [Signal { polarity: 1, magnitude: 100, multiplier: 1 }, Signal::default()];
         let config = AdaptationConfig::default();
         for i in 0..30 {
             tract.transmit_motor(&input, i);
@@ -252,11 +252,11 @@ mod tests {
     fn endurance_slows_fatigue() {
         let mut tract_fragile = FiberTract::new_motor(FiberTractKind::MotorSkeletal, 2);
         tract_fragile.endurance = 0;
-        tract_fragile.motor_signals[0] = Signal { polarity: 1, magnitude: 100 };
+        tract_fragile.motor_signals[0] = Signal { polarity: 1, magnitude: 100, multiplier: 1 };
 
         let mut tract_tough = FiberTract::new_motor(FiberTractKind::MotorSkeletal, 2);
         tract_tough.endurance = 255;
-        tract_tough.motor_signals[0] = Signal { polarity: 1, magnitude: 100 };
+        tract_tough.motor_signals[0] = Signal { polarity: 1, magnitude: 100, multiplier: 1 };
 
         let config = AdaptationConfig::default();
         for _ in 0..20 {
@@ -273,7 +273,7 @@ mod tests {
     #[test]
     fn density_tracks_activity() {
         let mut tract = FiberTract::new_motor(FiberTractKind::MotorSkeletal, 2);
-        tract.motor_signals[0] = Signal { polarity: 1, magnitude: 100 };
+        tract.motor_signals[0] = Signal { polarity: 1, magnitude: 100, multiplier: 1 };
 
         let config = AdaptationConfig::default();
 

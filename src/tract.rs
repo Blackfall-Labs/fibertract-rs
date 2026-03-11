@@ -71,10 +71,19 @@ pub enum FiberTractKind {
     /// Fast. Background postural control.
     /// Polarity: +1 = increase tone, -1 = decrease tone.
     MotorSpindle = 6,
+
+    // === Autonomic (Efferent, chemical) — brain → organ ===
+
+    /// Autonomic efferent (B-fiber analog): chemical concentration delivery.
+    /// Brain → organ. Carries NE or ACh concentration as a u8 value
+    /// packed into Signal magnitude. Moderate speed (autonomic B-fibers).
+    /// Used by vagus nerve (ACh) and sympathetic chain (NE).
+    /// Polarity: +1 = chemical present, 0 = no signal.
+    AutonomicEfferent = 7,
 }
 
 impl FiberTractKind {
-    pub const COUNT: usize = 7;
+    pub const COUNT: usize = 8;
 
     /// Is this an afferent (sensory, body→brain) tract?
     #[inline]
@@ -82,10 +91,16 @@ impl FiberTractKind {
         (self as u8) < 5
     }
 
-    /// Is this an efferent (motor, brain→body) tract?
+    /// Is this an efferent (motor/autonomic, brain→body) tract?
     #[inline]
     pub fn is_efferent(self) -> bool {
         (self as u8) >= 5
+    }
+
+    /// Is this an autonomic (chemical delivery) tract?
+    #[inline]
+    pub fn is_autonomic(self) -> bool {
+        matches!(self, Self::AutonomicEfferent)
     }
 
     /// Biological transmission speed class (0-255).
@@ -99,6 +114,7 @@ impl FiberTractKind {
             Self::Interoceptive    => 30,  // C visceral: slowest
             Self::MotorSkeletal    => 240, // Aα motor: fastest
             Self::MotorSpindle     => 180, // Aγ: fast
+            Self::AutonomicEfferent => 30, // B-fiber: slow (autonomic)
         }
     }
 
@@ -112,6 +128,7 @@ impl FiberTractKind {
             4 => Some(Self::Interoceptive),
             5 => Some(Self::MotorSkeletal),
             6 => Some(Self::MotorSpindle),
+            7 => Some(Self::AutonomicEfferent),
             _ => None,
         }
     }
@@ -124,8 +141,9 @@ impl FiberTractKind {
             Self::NociceptiveFast  => "Aδ",
             Self::NociceptiveSlow  => "C-noci",
             Self::Interoceptive    => "C-visc",
-            Self::MotorSkeletal    => "Aα-mot",
-            Self::MotorSpindle     => "Aγ-spin",
+            Self::MotorSkeletal     => "Aα-mot",
+            Self::MotorSpindle      => "Aγ-spin",
+            Self::AutonomicEfferent => "B-auto",
         }
     }
 }
@@ -284,7 +302,7 @@ impl FiberTract {
                 self.motor_signals[i] = if smoothed_mag == 0 {
                     Signal::default()
                 } else {
-                    Signal { polarity: prev.polarity, magnitude: smoothed_mag }
+                    Signal { polarity: prev.polarity, magnitude: smoothed_mag, multiplier: 1 }
                 };
                 self.motor_prev[i] = self.motor_signals[i];
                 continue;
@@ -337,7 +355,7 @@ impl FiberTract {
             let out = if final_mag == 0 {
                 Signal::default()
             } else {
-                Signal { polarity, magnitude: final_mag }
+                Signal { polarity, magnitude: final_mag, multiplier: 1 }
             };
 
             self.motor_signals[i] = out;
@@ -427,6 +445,86 @@ impl FiberTract {
         }
     }
 
+    /// Transmit autonomic chemical concentration through this tract.
+    ///
+    /// Autonomic efferent tracts deliver chemical concentration (NE or ACh)
+    /// from brain autonomic nuclei to organ targets. Input is `&[u8]` where
+    /// each channel is a chemical concentration level (0-255).
+    ///
+    /// Pipeline: gain → conductivity loss → fatigue degradation → elasticity smoothing.
+    /// No jitter (chemical release is smooth, not noisy).
+    /// No recruitment threshold (concentration, not motor unit recruitment).
+    ///
+    /// Output is stored in `motor_signals` as Signal with polarity=1, magnitude=concentration.
+    pub fn transmit_autonomic(&mut self, input: &[u8]) {
+        debug_assert!(self.kind.is_autonomic());
+        let len = input.len().min(self.dim);
+
+        let any_input = input[..len].iter().any(|&v| v > 0);
+        self.update_input_density(any_input);
+
+        for i in 0..len {
+            let raw = input[i];
+
+            if raw == 0 {
+                // Elasticity: smooth toward zero
+                let prev_mag = self.motor_prev[i].magnitude;
+                let smoothed = (prev_mag as u16 * (255 - self.elasticity) as u16 / 255) as u8;
+                let out = if smoothed == 0 {
+                    Signal::default()
+                } else {
+                    Signal { polarity: 1, magnitude: smoothed, multiplier: 1 }
+                };
+                self.motor_signals[i] = out;
+                self.motor_prev[i] = out;
+                continue;
+            }
+
+            let mut val = raw as u32;
+
+            // Gain modulation (128 = unity)
+            val = val * self.gain as u32 / 128;
+
+            // Conductivity loss
+            val = val * self.conductivity as u32 / 255;
+
+            // Fatigue degradation
+            val = val * (255u32.saturating_sub(self.fatigue as u32)) / 255;
+
+            let target = val.min(255) as u8;
+
+            // Elasticity smoothing
+            let prev = self.motor_prev[i].magnitude as i32;
+            let delta = target as i32 - prev;
+            let smoothed = prev + delta * self.elasticity as i32 / 255;
+            let final_val = smoothed.clamp(0, 255) as u8;
+
+            let out = if final_val == 0 {
+                Signal::default()
+            } else {
+                Signal { polarity: 1, magnitude: final_val, multiplier: 1 }
+            };
+
+            self.motor_signals[i] = out;
+            self.motor_prev[i] = out;
+        }
+
+        // Zero remaining channels
+        for i in len..self.dim {
+            self.motor_signals[i] = Signal::default();
+            self.motor_prev[i] = Signal::default();
+        }
+    }
+
+    /// Read the delivered chemical concentration from an autonomic tract.
+    ///
+    /// Returns the concentration on the given channel (0-255).
+    /// Convenience method that reads `motor_signals[channel].magnitude`.
+    pub fn autonomic_concentration(&self, channel: usize) -> u8 {
+        debug_assert!(self.kind.is_autonomic());
+        self.motor_signals.get(channel).map(|s| s.magnitude).unwrap_or(0)
+    }
+
     /// Update rolling input density based on whether input was nonzero.
     fn update_input_density(&mut self, any_input: bool) {
         if any_input {
@@ -484,10 +582,10 @@ mod tests {
         tract.elasticity = 255; // instant tracking
 
         let input = [
-            Signal { polarity: 1, magnitude: 100 },
-            Signal { polarity: -1, magnitude: 50 },
+            Signal { polarity: 1, magnitude: 100, multiplier: 1 },
+            Signal { polarity: -1, magnitude: 50, multiplier: 1 },
             Signal::default(),
-            Signal { polarity: 1, magnitude: 10 },
+            Signal { polarity: 1, magnitude: 10, multiplier: 1 },
         ];
 
         tract.transmit_motor(&input, 42);
@@ -518,7 +616,7 @@ mod tests {
         tract.elasticity = 255;
         tract.fatigue = 128; // 50% fatigued
 
-        let input = [Signal { polarity: 1, magnitude: 200 }];
+        let input = [Signal { polarity: 1, magnitude: 200, multiplier: 1 }];
         tract.transmit_motor(&input, 0);
 
         // 200 * 128/128 * 255/255 * (255-128)/255 = 200 * 127/255 ≈ 99
@@ -609,7 +707,39 @@ mod tests {
         assert!(FiberTractKind::Interoceptive.is_afferent());
         assert!(FiberTractKind::MotorSkeletal.is_efferent());
         assert!(FiberTractKind::MotorSpindle.is_efferent());
+        assert!(FiberTractKind::AutonomicEfferent.is_efferent());
+        assert!(FiberTractKind::AutonomicEfferent.is_autonomic());
         assert!(!FiberTractKind::Proprioceptive.is_efferent());
         assert!(!FiberTractKind::MotorSkeletal.is_afferent());
+        assert!(!FiberTractKind::MotorSkeletal.is_autonomic());
+    }
+
+    #[test]
+    fn autonomic_tract_transmits_concentration() {
+        let mut tract = FiberTract::new_motor(FiberTractKind::AutonomicEfferent, 2);
+        tract.gain = 128; // unity
+        tract.conductivity = 255;
+        tract.elasticity = 255;
+
+        let input = [200u8, 50u8];
+        tract.transmit_autonomic(&input);
+
+        assert_eq!(tract.autonomic_concentration(0), 200);
+        assert_eq!(tract.autonomic_concentration(1), 50);
+    }
+
+    #[test]
+    fn autonomic_tract_degrades_with_fatigue() {
+        let mut tract = FiberTract::new_motor(FiberTractKind::AutonomicEfferent, 1);
+        tract.gain = 128;
+        tract.conductivity = 255;
+        tract.elasticity = 255;
+        tract.fatigue = 128; // 50% fatigued
+
+        let input = [200u8];
+        tract.transmit_autonomic(&input);
+
+        // 200 * 128/128 * 255/255 * (255-128)/255 = 200 * 127/255 ≈ 99
+        assert_eq!(tract.autonomic_concentration(0), 99);
     }
 }
