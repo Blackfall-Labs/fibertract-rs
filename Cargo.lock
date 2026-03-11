@@ -98,7 +98,7 @@ dependencies = [
 
 [[package]]
 name = "fibertract"
-version = "0.1.0"
+version = "1.1.0"
 dependencies = [
  "env_logger",
  "log",
@@ -336,9 +336,9 @@ dependencies = [
 
 [[package]]
 name = "ternary-signal"
-version = "0.1.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "594d426a9d36bcf71a5b001313c5a084c644d2afef646272e1a38052ea9bd722"
+checksum = "ff51579de60ff5e5975a851715e3d93a45edf43c8a3ddda4781d5f46f5276c1b"
 dependencies = [
  "serde",
 ]
